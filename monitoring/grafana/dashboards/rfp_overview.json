@@ -1,0 +1,165 @@
+{
+  "title": "RFP Responder – Overview",
+  "uid": "rfp-overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "tags": ["rfp", "llm", "production"],
+  "panels": [
+
+    {
+      "id": 1,
+      "title": "Request Rate (req/s)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 6 },
+      "targets": [{
+        "expr": "sum(rate(http_requests_total{job=\"rfp_api\"}[1m]))",
+        "legendFormat": "req/s"
+      }]
+    },
+
+    {
+      "id": 2,
+      "title": "Error Rate (%)",
+      "type": "timeseries",
+      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 6 },
+      "targets": [{
+        "expr": "100 * sum(rate(http_requests_total{job=\"rfp_api\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"rfp_api\"}[5m]))",
+        "legendFormat": "5xx %"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "steps": [
+        { "value": 0, "color": "green" },
+        { "value": 1, "color": "yellow" },
+        { "value": 5, "color": "red" }
+      ]}}}
+    },
+
+    {
+      "id": 3,
+      "title": "p99 API Latency (s)",
+      "type": "timeseries",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 6 },
+      "targets": [{
+        "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"rfp_api\"}[5m])) by (le))",
+        "legendFormat": "p99"
+      }, {
+        "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=\"rfp_api\"}[5m])) by (le))",
+        "legendFormat": "p50"
+      }]
+    },
+
+    {
+      "id": 4,
+      "title": "Auto-Approve Rate (1h)",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 6, "w": 6, "h": 4 },
+      "targets": [{
+        "expr": "sum(rate(rfp_questions_auto_approved_total[1h])) / (sum(rate(rfp_questions_auto_approved_total[1h])) + sum(rate(rfp_questions_human_reviewed_total[1h])))",
+        "legendFormat": "Auto-approve rate"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "steps": [
+        { "value": 0, "color": "red" },
+        { "value": 0.6, "color": "yellow" },
+        { "value": 0.8, "color": "green" }
+      ]}}}
+    },
+
+    {
+      "id": 5,
+      "title": "Human Override Rate (1h)",
+      "type": "stat",
+      "gridPos": { "x": 6, "y": 6, "w": 6, "h": 4 },
+      "targets": [{
+        "expr": "sum(rate(rfp_questions_human_overridden_total[1h])) / sum(rate(rfp_questions_human_reviewed_total[1h]))",
+        "legendFormat": "Override rate"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "steps": [
+        { "value": 0, "color": "green" },
+        { "value": 0.3, "color": "yellow" },
+        { "value": 0.5, "color": "red" }
+      ]}}}
+    },
+
+    {
+      "id": 6,
+      "title": "Workflow Completions (1h)",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 6, "w": 6, "h": 4 },
+      "targets": [{
+        "expr": "sum(increase(rfp_workflow_completions_total{status=\"complete\"}[1h]))",
+        "legendFormat": "Completed"
+      }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" }}}
+    },
+
+    {
+      "id": 7,
+      "title": "Workflow Failures (1h)",
+      "type": "stat",
+      "gridPos": { "x": 18, "y": 6, "w": 6, "h": 4 },
+      "targets": [{
+        "expr": "sum(increase(rfp_workflow_completions_total{status=\"failed\"}[1h]))",
+        "legendFormat": "Failed"
+      }],
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "steps": [
+        { "value": 0, "color": "green" },
+        { "value": 1, "color": "red" }
+      ]}}}
+    },
+
+    {
+      "id": 8,
+      "title": "Vector Confidence Distribution",
+      "type": "histogram",
+      "gridPos": { "x": 0, "y": 10, "w": 12, "h": 8 },
+      "targets": [{
+        "expr": "sum(rate(rfp_vector_confidence_bucket[1h])) by (le)",
+        "legendFormat": "{{le}}"
+      }]
+    },
+
+    {
+      "id": 9,
+      "title": "Workflow Duration p95 (s)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 10, "w": 12, "h": 8 },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum(rate(rfp_workflow_duration_seconds_bucket[30m])) by (le))",
+        "legendFormat": "p95 duration"
+      }, {
+        "expr": "histogram_quantile(0.50, sum(rate(rfp_workflow_duration_seconds_bucket[30m])) by (le))",
+        "legendFormat": "p50 duration"
+      }],
+      "fieldConfig": { "defaults": { "unit": "s" }}
+    },
+
+    {
+      "id": 10,
+      "title": "Job Queue Depth",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 18, "w": 12, "h": 6 },
+      "targets": [{
+        "expr": "rfp_job_queue_depth",
+        "legendFormat": "{{queue}}"
+      }],
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [
+        { "value": 0, "color": "green" },
+        { "value": 20, "color": "yellow" },
+        { "value": 50, "color": "red" }
+      ]}}}
+    },
+
+    {
+      "id": 11,
+      "title": "Job Processing Time p95 (s)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 18, "w": 12, "h": 6 },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum(rate(rfp_job_processing_seconds_bucket[30m])) by (le, job_type))",
+        "legendFormat": "{{job_type}} p95"
+      }],
+      "fieldConfig": { "defaults": { "unit": "s" }}
+    }
+  ]
+}

@@ -1,0 +1,325 @@
+###############################################################################
+# RFP Responder – Full-stack docker-compose
+#
+# Services
+# ─────────
+#   api        FastAPI backend (uvicorn)
+#   worker     arq background job worker
+#   frontend   Next.js 15 app
+#   postgres   LangGraph checkpoint store
+#   qdrant     Vector DB (tenant-isolated collections)
+#   neo4j      Infrastructure knowledge graph
+#   redis      arq job queue + rate-limit state
+#   jackson    BoxyHQ SAML → OAuth2 proxy
+#   prometheus Metrics collection
+#   grafana    Dashboards
+#
+# Usage
+# ─────
+#   cp .env.example .env          # fill in secrets
+#   docker compose up -d          # start everything
+#   docker compose logs -f api    # tail backend logs
+###############################################################################
+
+x-api-common: &api-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: runtime
+  env_file: .env
+  depends_on:
+    postgres:
+      condition: service_healthy
+    qdrant:
+      condition: service_healthy
+    neo4j:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+  networks:
+    - backend
+
+services:
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # API
+  # ────────────────────────────────────────────────────────────────────────────
+  api:
+    <<: *api-common
+    container_name: rfp_api
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        uvicorn rfp_responder.app.main:app
+          --host 0.0.0.0 --port 8000
+          --workers ${UVICORN_WORKERS:-2}
+          --loop uvloop --access-log
+      "
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: production
+      PORT: "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "8000"
+      prometheus.path: "/metrics"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Worker (arq background jobs)
+  # ────────────────────────────────────────────────────────────────────────────
+  worker:
+    <<: *api-common
+    container_name: rfp_worker
+    command: python -m rfp_responder.worker.main
+    environment:
+      APP_ENV: production
+    # Workers don't expose HTTP; healthcheck via redis ping
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; redis.Redis.from_url('${REDIS_DSN}').ping()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Frontend
+  # ────────────────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+    container_name: rfp_frontend
+    env_file: frontend/.env.example   # override with frontend/.env in prod
+    environment:
+      BACKEND_URL: http://api:8000
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - backend
+      - frontend
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # PostgreSQL – LangGraph durable checkpoint store
+  # ────────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: rfp_postgres
+    environment:
+      POSTGRES_DB: rfp_responder
+      POSTGRES_USER: ${POSTGRES_USER:-rfp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rfp} -d rfp_responder"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Qdrant – vector store
+  # ────────────────────────────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.13.0
+    container_name: rfp_qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"   # gRPC
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Neo4j – infrastructure knowledge graph
+  # ────────────────────────────────────────────────────────────────────────────
+  neo4j:
+    image: neo4j:5.27-community
+    container_name: rfp_neo4j
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    ports:
+      - "7474:7474"   # HTTP browser
+      - "7687:7687"   # Bolt
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7474"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Redis – arq job queue + rate-limit counters
+  # ────────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: rfp_redis
+    command: >
+      redis-server
+        --requirepass ${REDIS_PASSWORD:-changeme}
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --save 60 1
+        --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # BoxyHQ SAML Jackson – SAML → OAuth2 proxy for enterprise SSO
+  # ────────────────────────────────────────────────────────────────────────────
+  jackson:
+    image: boxyhq/saml-jackson:latest
+    container_name: rfp_jackson
+    environment:
+      DB_ENGINE: pg
+      DB_URL: postgresql://${POSTGRES_USER:-rfp}:${POSTGRES_PASSWORD}@postgres:5432/rfp_responder
+      JACKSON_API_KEYS: ${BOXYHQ_SAML_ADMIN_SECRET:?BOXYHQ_SAML_ADMIN_SECRET required}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      EXTERNAL_URL: ${JACKSON_EXTERNAL_URL:-http://localhost:5225}
+      OPENID_JWS_ALG: RS256
+    ports:
+      - "5225:5225"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - backend
+      - frontend
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Prometheus
+  # ────────────────────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: rfp_prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    networks:
+      - backend
+      - monitoring
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Alertmanager
+  # ────────────────────────────────────────────────────────────────────────────
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: rfp_alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Grafana
+  # ────────────────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: rfp_grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD required}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3001}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Named volumes
+# ─────────────────────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+  qdrant_data:
+  neo4j_data:
+  neo4j_logs:
+  redis_data:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Networks
+# ─────────────────────────────────────────────────────────────────────────────
+networks:
+  backend:
+    driver: bridge
+  frontend:
+    driver: bridge
+  monitoring:
+    driver: bridge

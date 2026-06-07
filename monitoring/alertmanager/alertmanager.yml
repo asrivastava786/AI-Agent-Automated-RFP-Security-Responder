@@ -1,0 +1,53 @@
+global:
+  resolve_timeout: 5m
+  # Slack webhook for critical alerts (set via environment or secret manager)
+  slack_api_url: "${SLACK_WEBHOOK_URL}"
+
+route:
+  receiver: default
+  group_by: [alertname, severity]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # Critical → immediate Slack page
+    - match:
+        severity: critical
+      receiver: slack-critical
+      repeat_interval: 1h
+
+    # Warning → Slack notification (batched)
+    - match:
+        severity: warning
+      receiver: slack-warning
+      repeat_interval: 6h
+
+receivers:
+  - name: default
+    slack_configs:
+      - channel: "#rfp-alerts"
+        title: "{{ .GroupLabels.alertname }}"
+        text: "{{ range .Alerts }}{{ .Annotations.description }}{{ end }}"
+
+  - name: slack-critical
+    slack_configs:
+      - channel: "#rfp-oncall"
+        title: ":rotating_light: CRITICAL: {{ .GroupLabels.alertname }}"
+        text: "{{ range .Alerts }}{{ .Annotations.description }}{{ end }}"
+        send_resolved: true
+
+  - name: slack-warning
+    slack_configs:
+      - channel: "#rfp-alerts"
+        title: ":warning: WARNING: {{ .GroupLabels.alertname }}"
+        text: "{{ range .Alerts }}{{ .Annotations.description }}{{ end }}"
+        send_resolved: true
+
+inhibit_rules:
+  # Suppress warnings when the same component is already firing critical
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: [alertname]

@@ -1,0 +1,152 @@
+groups:
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # SLO: API availability
+  # ────────────────────────────────────────────────────────────────────────────
+  - name: api_availability
+    rules:
+
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Error rate > 5% for 2 minutes"
+          description: "{{ $value | humanizePercentage }} of requests are returning 5xx errors."
+
+      - alert: HighP99Latency
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, handler)
+          ) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p99 API latency > 10s on {{ $labels.handler }}"
+          description: "p99 latency is {{ $value | humanizeDuration }}."
+
+      - alert: APIDown
+        expr: up{job="rfp_api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "RFP API is down"
+          description: "The API scrape target has been unreachable for 1 minute."
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # LLM / workflow quality
+  # ────────────────────────────────────────────────────────────────────────────
+  - name: workflow_quality
+    rules:
+
+      - alert: LowAutoApproveRate
+        expr: |
+          (
+            sum(rate(rfp_questions_auto_approved_total[1h]))
+            /
+            (
+              sum(rate(rfp_questions_auto_approved_total[1h]))
+              + sum(rate(rfp_questions_human_reviewed_total[1h]))
+            )
+          ) < 0.60
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Auto-approve rate dropped below 60%"
+          description: |
+            Current rate: {{ $value | humanizePercentage }}.
+            This may indicate knowledge-base staleness or retrieval degradation.
+            Check Qdrant collection freshness and LangSmith eval scores.
+
+      - alert: HighHumanOverrideRate
+        expr: |
+          (
+            sum(rate(rfp_questions_human_overridden_total[1h]))
+            /
+            sum(rate(rfp_questions_human_reviewed_total[1h]))
+          ) > 0.50
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Human override rate > 50%"
+          description: |
+            Reviewers are overriding > 50% of proposed answers.
+            Current rate: {{ $value | humanizePercentage }}.
+            This signals a systematic quality issue in the draft node.
+
+      - alert: WorkflowFailures
+        expr: |
+          sum(rate(rfp_workflow_completions_total{status="failed"}[15m])) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "RFP workflow failure rate elevated"
+          description: "More than 0.1 failures/minute in the last 15m."
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job queue health
+  # ────────────────────────────────────────────────────────────────────────────
+  - name: job_queue
+    rules:
+
+      - alert: JobQueueBacklog
+        expr: rfp_job_queue_depth > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job queue depth > 50"
+          description: "{{ $value }} jobs are waiting. Consider scaling up workers."
+
+      - alert: SlowJobProcessing
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(rfp_job_processing_seconds_bucket[30m])) by (le, job_type)
+          ) > 600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 job processing time > 10 minutes for {{ $labels.job_type }}"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Infrastructure
+  # ────────────────────────────────────────────────────────────────────────────
+  - name: infrastructure
+    rules:
+
+      - alert: PostgresDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL exporter unreachable"
+
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis exporter unreachable"
+
+      - alert: HighPostgresConnections
+        expr: |
+          pg_stat_activity_count > pg_settings_max_connections * 0.80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres connections at {{ $value | humanizePercentage }} of max"
