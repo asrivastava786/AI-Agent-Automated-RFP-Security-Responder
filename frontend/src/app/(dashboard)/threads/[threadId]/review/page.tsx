@@ -37,7 +37,7 @@ export default function ReviewPage() {
   const router        = useRouter();
   const queryClient   = useQueryClient();
 
-  const tenantId = session?.user.tenantId ?? "";
+  const tenantId = session?.user?.tenantId ?? "";
 
   // ── Fetch review items ─────────────────────────────────────────────────────
   const { data, isLoading, error: fetchError } = useQuery({

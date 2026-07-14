@@ -47,7 +47,7 @@ export default function ThreadStatusPage() {
   const { threadId }      = useParams<{ threadId: string }>();
   const { data: session } = useSession();
   const router            = useRouter();
-  const tenantId          = session?.user.tenantId;
+  const tenantId          = session?.user?.tenantId;
 
   const { data, isLoading, error } = useThreadStatus(tenantId, threadId);
 

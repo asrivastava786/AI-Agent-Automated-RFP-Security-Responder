@@ -88,7 +88,7 @@ const IDP_GUIDES: Array<{ name: string; docsUrl: string; hint: string }> = [
 
 export default function SSOAdminPage() {
   const { data: session } = useSession();
-  const tenantDomain = session?.user.tenantId ?? "";
+  const tenantDomain = session?.user?.tenantId ?? "";
 
   const [savedConfig, setSavedConfig] = useState<SSOConfigResponse | null>(null);
   const [loading, setLoading]         = useState(false);

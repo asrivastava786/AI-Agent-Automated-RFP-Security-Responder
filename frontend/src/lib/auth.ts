@@ -94,6 +94,10 @@ async function mockVerifyCredentials(
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   secret: process.env.AUTH_SECRET,
+  // Deployed behind hosts (e.g. shared hosting, reverse proxies) that don't
+  // match NEXTAUTH_URL/AUTH_URL exactly. Without this, Auth.js rejects every
+  // request with "UntrustedHost" and auth() silently returns undefined.
+  trustHost: true,
 
   providers: [
     // ── 1. Standard credentials ─────────────────────────────────────────────

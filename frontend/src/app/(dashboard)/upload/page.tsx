@@ -61,7 +61,7 @@ export default function UploadPage() {
 
   // ── Submit ──────────────────────────────────────────────────────────────────
   async function onSubmit(values: UploadForm) {
-    if (!session?.user.tenantId) return;
+    if (!session?.user?.tenantId) return;
     setLoading(true);
     setError(null);
 

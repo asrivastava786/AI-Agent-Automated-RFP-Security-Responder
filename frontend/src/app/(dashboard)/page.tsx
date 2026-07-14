@@ -20,7 +20,7 @@ export default async function DashboardPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">RFP Threads</h1>
           <p className="text-gray-500 text-sm mt-1">
-            All questionnaire workflows for <span className="font-medium">{session?.user.tenantId}</span>
+            All questionnaire workflows for <span className="font-medium">{session?.user?.tenantId}</span>
           </p>
         </div>
         <Link
