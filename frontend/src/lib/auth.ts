@@ -59,7 +59,7 @@ declare module "next-auth" {
   }
 }
 
-declare module "next-auth/jwt" {
+declare module "@auth/core/jwt" {
   interface JWT {
     tenantId: string;
     provider: "credentials" | "saml";
