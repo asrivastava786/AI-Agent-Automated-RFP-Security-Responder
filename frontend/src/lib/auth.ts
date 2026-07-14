@@ -59,13 +59,6 @@ declare module "next-auth" {
   }
 }
 
-declare module "@auth/core/jwt" {
-  interface JWT {
-    tenantId: string;
-    provider: "credentials" | "saml";
-  }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Credentials schema
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,17 +159,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // `user` is only populated on initial sign-in, not on subsequent
       // calls.  We persist the fields we need to the JWT so they survive
       // token refreshes.
+      const augmentedToken = token as typeof token & { tenantId: string; provider: "credentials" | "saml" };
       if (user) {
-        token.tenantId = (user as { tenantId: string }).tenantId;
-        token.provider = account?.provider === "boxyhq-saml" ? "saml" : "credentials";
+        augmentedToken.tenantId = (user as { tenantId: string }).tenantId;
+        augmentedToken.provider = account?.provider === "boxyhq-saml" ? "saml" : "credentials";
       }
-      return token;
+      return augmentedToken;
     },
 
     async session({ session, token }) {
       // Expose tenantId and provider to client components via useSession()
-      session.user.tenantId = token.tenantId;
-      session.user.provider = token.provider;
+      const augmentedToken = token as typeof token & { tenantId: string; provider: "credentials" | "saml" };
+      session.user.tenantId = augmentedToken.tenantId;
+      session.user.provider = augmentedToken.provider;
       return session;
     },
   },
