@@ -89,6 +89,19 @@ async function mockVerifyCredentials(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Enterprise SAML SSO via BoxyHQ Jackson – only registered when Jackson is
+// actually configured. Without this guard, a missing env var turns into the
+// literal string "undefined" via the `!` assertion, which crashes URL
+// construction inside the provider's OIDC discovery on *every* request
+// (middleware calls auth() unconditionally), not just SSO logins.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const boxyhqSamlConfigured =
+  !!process.env.BOXYHQ_SAML_ISSUER &&
+  !!process.env.BOXYHQ_SAML_CLIENT_ID &&
+  !!process.env.BOXYHQ_SAML_CLIENT_SECRET;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // NextAuth configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -129,32 +142,39 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // The `tenant` and `product` query params in authorization.params tell
     // Jackson which IdP configuration to load for this login attempt.
     // The tenant is set dynamically in the login page before redirecting.
-    BoxyHQSAMLProvider({
-      issuer:       process.env.BOXYHQ_SAML_ISSUER!,
-      clientId:     process.env.BOXYHQ_SAML_CLIENT_ID!,
-      clientSecret: process.env.BOXYHQ_SAML_CLIENT_SECRET!,
-      authorization: {
-        params: {
-          // `product` is constant across all enterprise tenants.
-          // `tenant` is set per-login in the frontend via a dynamic signIn() call.
-          product: process.env.NEXT_PUBLIC_SAML_PRODUCT ?? "rfp-responder",
-          scope:   "openid email profile",
-        },
-      },
-      // Jackson returns tenant info in the profile's `requested` object.
-      profile(profile) {
-        return {
-          id:       profile.id ?? profile.sub,
-          name:     profile.name,
-          email:    profile.email,
-          image:    profile.image ?? null,
-          tenantId: (profile as Record<string, unknown>).requested
-            ? (profile as Record<string, { tenant: string }>).requested.tenant
-            : "",
-          provider: "saml" as const,
-        };
-      },
-    }),
+    //
+    // Only registered when Jackson is actually configured — see
+    // `boxyhqSamlConfigured` above for why this must not run with unset env vars.
+    ...(boxyhqSamlConfigured
+      ? [
+          BoxyHQSAMLProvider({
+            issuer:       process.env.BOXYHQ_SAML_ISSUER!,
+            clientId:     process.env.BOXYHQ_SAML_CLIENT_ID!,
+            clientSecret: process.env.BOXYHQ_SAML_CLIENT_SECRET!,
+            authorization: {
+              params: {
+                // `product` is constant across all enterprise tenants.
+                // `tenant` is set per-login in the frontend via a dynamic signIn() call.
+                product: process.env.NEXT_PUBLIC_SAML_PRODUCT ?? "rfp-responder",
+                scope:   "openid email profile",
+              },
+            },
+            // Jackson returns tenant info in the profile's `requested` object.
+            profile(profile) {
+              return {
+                id:       profile.id ?? profile.sub,
+                name:     profile.name,
+                email:    profile.email,
+                image:    profile.image ?? null,
+                tenantId: (profile as Record<string, unknown>).requested
+                  ? (profile as Record<string, { tenant: string }>).requested.tenant
+                  : "",
+                provider: "saml" as const,
+              };
+            },
+          }),
+        ]
+      : []),
   ],
 
   // ── JWT callbacks ──────────────────────────────────────────────────────────
